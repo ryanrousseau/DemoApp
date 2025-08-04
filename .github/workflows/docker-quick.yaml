@@ -1,0 +1,67 @@
+name: Build and Push Docker Image - Quick
+
+on:
+  #push:
+  #  paths:
+  #    #- "API/**"
+  #  branches:
+  #    - main
+  workflow_dispatch: {}
+
+env:
+  OCTOPUS_URL: https://wrg.octopus.app
+  OCTOPUS_SERVICE_ACCOUNT: b45a10cc-1380-480d-ab25-28e36d54cd63
+  OCTOPUS_SPACE: New Cascadia Imports
+  DOCKER_HUB_REPOSITORY: octopussolutionsengineering/demoapp-prime
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Set version number
+        id: version-generator
+        run: echo "version=$(date +'%Y.%m.%s')-quick" >> $GITHUB_OUTPUT
+
+      - name: Login to Octopus Deploy
+        uses: OctopusDeploy/login@v1
+        with:
+          server: ${{ env.OCTOPUS_URL }}
+          service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - uses: OctopusDeploy/push-build-information-action@v3
+        name: Push build information 🐙
+        with:
+          version: ${{ steps.version-generator.outputs.version }}
+          packages: |
+            ${{ env.DOCKER_HUB_REPOSITORY }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build and push to Docker Hub
+        uses: docker/build-push-action@v4
+        with:
+          context: ./API/
+          file: ./API/Dockerfile
+          push: true
+          platforms: linux/x86_64,linux/arm64,linux/amd64
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ env.DOCKER_HUB_REPOSITORY }}:${{ steps.version-generator.outputs.version }}
