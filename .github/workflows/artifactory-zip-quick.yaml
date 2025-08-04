@@ -1,0 +1,78 @@
+name: Build and Push Zip to Artifactory - Quick
+
+on:
+  #push:
+  #  paths:
+  #    - "API/**"
+  #  branches:
+  #    - main
+  workflow_dispatch: {}
+
+env:
+  OCTOPUS_URL: https://wrg.octopus.app
+  OCTOPUS_SERVICE_ACCOUNT: b45a10cc-1380-480d-ab25-28e36d54cd63
+  OCTOPUS_SPACE: New Cascadia Imports
+  PACKAGE_ID: API
+  ARTIFACTORY_URL: https://artifactory.octopussamples.com/artifactory
+  ARTIFACTORY_REPOSITORY: demo-octopus-app-generic
+  ARTIFACTORY_ORG: app.octopus.wrg.newcascadiaimports
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set Version Number
+        id: version-generator
+        run: echo "version=$(date +'%Y.%m.%s')-quick" >> $GITHUB_OUTPUT
+
+      - name: Login to Octopus Deploy
+        uses: OctopusDeploy/login@v1
+        with:
+          server: ${{ env.OCTOPUS_URL }}
+          service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0
+
+      - name: Install dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: |
+          cd API
+          dotnet build --configuration Release --no-restore
+          dotnet publish -c Release -o ../demoapp-publish -r linux-x64 --self-contained true /p:UseAppHost=true
+
+      - name: Create a Zip package 🐙
+        uses: OctopusDeploy/create-zip-package-action@v3
+        with:
+          package_id: ${{ env.PACKAGE_ID }}
+          version: ${{ steps.version-generator.outputs.version }}
+          output_folder: "./packaging"
+          base_path: demoapp-publish
+          files: |
+            **/*.*
+
+      - uses: OctopusDeploy/push-build-information-action@v3
+        name: Push build information 🐙
+        with:
+          version: ${{ steps.version-generator.outputs.version }}
+          packages: |
+            ${{ env.ARTIFACTORY_ORG }}/${{ env.PACKAGE_ID }}/${{ env.PACKAGE_ID }}
+
+      - name: Upload package to Artifactory
+        run: |
+          packageFileName="${{ env.PACKAGE_ID }}.${{ steps.version-generator.outputs.version }}.zip"
+          packageSource="./packaging/$packageFileName"
+          url="${{ env.ARTIFACTORY_URL }}/${{ env.ARTIFACTORY_REPOSITORY }}/${{ env.ARTIFACTORY_ORG }}/${{ env.PACKAGE_ID }}/$packageFileName"
+          curl -v --user ${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_ACCESS_TOKEN }} --data-binary $packageSource -X PUT $url
+          echo "Uploaded package to Artifactory: $url"
