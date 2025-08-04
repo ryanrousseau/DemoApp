@@ -20,7 +20,8 @@ public class VersionController : ControllerBase
     public VersionDetails Get()
     {
         var details = new VersionDetails {
-            Version = _configuration["Version"]
+            Release = _configuration["RELEASE"],
+            Version = _configuration["VERSION"]
         };
 
         Console.WriteLine(details.Version);

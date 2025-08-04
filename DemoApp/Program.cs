@@ -1,6 +1,6 @@
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Configuration.AddEnvironmentVariables(prefix: "Demo_");
+builder.Configuration.AddEnvironmentVariables(prefix: "");
 
 // Add services to the container.
 builder.Services.AddControllers();
