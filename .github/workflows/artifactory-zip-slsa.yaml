@@ -1,0 +1,274 @@
+name: Build and Push Zip to Artifactory - SLSA
+
+on:
+    #push:
+    #  paths:
+    #    - "API/**"
+    #  branches:
+    #    - main
+    workflow_dispatch: {}
+
+env:
+    OCTOPUS_URL: https://wrg.octopus.app
+    OCTOPUS_SERVICE_ACCOUNT: b45a10cc-1380-480d-ab25-28e36d54cd63
+    OCTOPUS_SPACE: New Cascadia Imports
+    PACKAGE_ID: API
+    SBOM_PACKAGE: API.SBOM
+    ARTIFACTORY_URL: https://artifactory.octopussamples.com/artifactory
+    ARTIFACTORY_REPOSITORY: demo-octopus-app-generic
+    ARTIFACTORY_ORG: app.octopus.wrg.newcascadiaimports
+
+jobs:
+    configure:
+        runs-on: ubuntu-latest
+        name: Configure Workflow
+        outputs:
+            version: ${{ steps.version-generator.outputs.version }}
+        steps:
+            - name: Set Version Number
+              id: version-generator
+              run: echo "version=$(date +'%Y.%m.%s')" >> $GITHUB_OUTPUT
+
+    scan:
+        runs-on: ubuntu-latest
+        name: Scan Code
+        permissions:
+            security-events: write
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Run Trivy vulnerability scanner on repo
+              uses: aquasecurity/trivy-action@0.32.0
+              with:
+                  scan-type: "fs"
+                  ignore-unfixed: true
+                  exit-code: "1"
+                  format: "sarif"
+                  output: "trivy-results.sarif"
+                  severity: "MEDIUM,HIGH,CRITICAL"
+
+            - name: Upload Trivy scan results to GitHub Security tab
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                  sarif_file: "trivy-results.sarif"
+
+    create-gh-release:
+        name: Create GitHub Release
+        needs: [configure, scan]
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write
+            contents: write
+        steps:
+            - name: Checkout Code to build website
+              uses: actions/checkout@v1
+
+            - name: Create Release for GitHub
+              id: create_release
+              uses: ncipollo/release-action@v1
+              if: github.ref == 'refs/heads/main'
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
+              with:
+                  tag: "${{ needs.configure.outputs.version }}"
+                  name: Release ${{ needs.configure.outputs.version }}
+                  body: |
+                      Automatic Release creation by GitHub Action
+                      Commit Message: ${{ github.event.head_commit.message }}
+                  draft: false
+
+    build:
+        name: Build and Scan packages
+        needs: [configure, scan, create-gh-release]
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write
+        outputs:
+            app_hash: ${{ steps.determine_app_hash.outputs.APP_HASH }}
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v2
+
+            - name: Login to Octopus Deploy
+              uses: OctopusDeploy/login@v1
+              with:
+                  server: ${{ env.OCTOPUS_URL }}
+                  service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
+
+            - name: Setup .NET
+              uses: actions/setup-dotnet@v4
+              with:
+                  dotnet-version: 9.0
+
+            - name: Install dependencies
+              run: dotnet restore
+
+            - name: Build
+              run: |
+                  cd API
+                  dotnet build --configuration Release --no-restore
+                  dotnet publish -c Release -o ../demoapp-publish -r win-x64 --self-contained true /p:UseAppHost=true
+
+            - name: Run Trivy vulnerability scanner on published folder
+              uses: aquasecurity/trivy-action@0.32.0
+              with:
+                  scan-type: "fs"
+                  scan-ref: "demoapp-publish"
+                  ignore-unfixed: true
+                  exit-code: "1"
+                  format: "sarif"
+                  output: "trivy-results.sarif"
+                  severity: "MEDIUM,HIGH,CRITICAL"
+
+            - name: Create a Zip package 🐙
+              uses: OctopusDeploy/create-zip-package-action@v3
+              with:
+                  package_id: ${{ env.PACKAGE_ID }}
+                  version: ${{ needs.configure.outputs.version }}
+                  output_folder: "./packaging"
+                  base_path: demoapp-publish
+                  files: |
+                      **/*.*
+
+            - name: Create the Subject Checksum file for Attestation Build Provenance
+              id: determine_app_hash
+              shell: pwsh
+              run: |
+                  $packageHash = Get-FileHash -path "packaging/${{ env.PACKAGE_ID }}.${{ needs.configure.outputs.version }}.zip" -Algorithm SHA256
+                  $hashToSave = $packageHash.Hash
+                  Write-Host "The app hash is $hashToSave"
+
+                  "APP_HASH=$hashToSave" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+            - uses: OctopusDeploy/push-build-information-action@v3
+              name: Push build information 🐙
+              with:
+                  version: ${{ needs.configure.outputs.version }}
+                  packages: |
+                      ${{ env.PACKAGE_ID }}
+
+            - name: Push a package to Octopus Deploy 🐙
+              uses: OctopusDeploy/push-package-action@v3
+              with:
+                  packages: |
+                      ./packaging/${{ env.PACKAGE_ID }}.${{ needs.configure.outputs.version }}.zip
+
+            - name: Upload packages to Artifactory
+              run: |
+                  packageSourceFileName="${{ env.PACKAGE_ID }}.${{ needs.configure.outputs.version }}.zip"
+                  packageSource="./packaging/$packageSourceFileName"
+                  packageTargetFileName="${{ env.PACKAGE_ID }}-${{ needs.configure.outputs.version }}.zip"
+                  url="${{ env.ARTIFACTORY_URL }}/${{ env.ARTIFACTORY_REPOSITORY }}/${{ env.ARTIFACTORY_ORG }}/${{ env.PACKAGE_ID }}/$packageTargetFileName"
+                  curl -v --user ${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_ACCESS_TOKEN }} -T $packageSource -X PUT $url
+                  echo "Uploaded package to Artifactory: $url"
+
+    sbom:
+        name: Generate and Publish SBOM
+        outputs:
+            sbom_hash: ${{ steps.determine_sbom_hash.outputs.SBOM_HASH }}
+        needs: [configure, scan, create-gh-release]
+        runs-on: ubuntu-latest
+        permissions:
+            # Add any additional permissions your job requires here
+            id-token: write # This is required to obtain the OIDC Token for Octopus Deploy
+        steps:
+            - name: Checkout the code for SBOM
+              uses: actions/checkout@v1
+              with:
+                  fetch-depth: "0"
+
+            - name: Run Trivy in GitHub SBOM mode and submit results to Dependency Graph
+              uses: aquasecurity/trivy-action@0.32.0
+              with:
+                  scan-type: "fs"
+                  format: "github"
+                  output: "dependency-results.sbom.json"
+                  scan-ref: "."
+                  github-pat: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Package SBOM
+              id: "sbom_package"
+              uses: OctopusDeploy/create-zip-package-action@v3
+              with:
+                  package_id: "${{ env.SBOM_PACKAGE }}"
+                  version: "${{ needs.configure.outputs.version }}"
+                  base_path: "./"
+                  files: "dependency-results.sbom.json"
+                  output_folder: packaged
+
+            - name: Create the Subject Checksum file for Attestation Build Provenance
+              id: determine_sbom_hash
+              shell: pwsh
+              run: |
+                  $packageHash = Get-FileHash -path "packaged/${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip" -Algorithm SHA256
+                  $hashToSave = $packageHash.Hash 
+                  Write-Host "The SBOM package hash is $hashToSave"
+
+                  "SBOM_HASH=$hashToSave" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+            - name: Login to Octopus Deploy 🐙
+              uses: OctopusDeploy/login@v1
+              with:
+                  server: ${{ env.OCTOPUS_URL }}
+                  service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
+
+            - name: Push build information to Octopus 🐙
+              uses: OctopusDeploy/push-build-information-action@v3
+              with:
+                  packages: |
+                      ${{ env.ARTIFACTORY_ORG }}/${{ env.PACKAGE_ID }}/${{ env.PACKAGE_ID }}
+                      ${{ env.ARTIFACTORY_ORG }}/${{ env.SBOM_PACKAGE }}/${{ env.SBOM_PACKAGE }}
+                  version: "${{ needs.configure.outputs.version }}"
+
+            - name: Push packages to Octopus 🐙
+              uses: OctopusDeploy/push-package-action@v3
+              with:
+                  packages: |
+                      packaged/${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip
+
+            - name: Upload packages to Artifactory
+              run: |
+
+
+                  packageSourceFileName="${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip"
+                  packageSource="./packaged/$packageSourceFileName"
+                  packageTargetFileName="${{ env.SBOM_PACKAGE }}-${{ needs.configure.outputs.version }}.zip"
+                  url="${{ env.ARTIFACTORY_URL }}/${{ env.ARTIFACTORY_REPOSITORY }}/${{ env.ARTIFACTORY_ORG }}/${{ env.SBOM_PACKAGE }}/$packageTargetFileName"
+                  curl -v --user ${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_ACCESS_TOKEN }} -T $packageSource -X PUT $url
+                  echo "Uploaded package to Artifactory: $url"
+
+    create_attestations:
+        name: Create Attestations
+        needs: [configure, scan, create-gh-release, build, sbom]
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write
+            attestations: write # Required to publish attestations
+        steps:
+            - name: Create the subject checksum file for provenance
+              shell: pwsh
+              run: |
+                  $cleanedSbomSha = $("${{ needs.sbom.outputs.sbom_hash }}" -replace "sha256:", "").Trim()
+                  $cleanedAppSha = $("${{ needs.build.outputs.app_hash }}" -replace "sha256:", "").Trim()
+
+                  $appSubject = "${{ env.ARTIFACTORY_ORG }}/${{ env.PACKAGE_ID }}/${{ env.PACKAGE_ID }}.${{ needs.configure.outputs.version }}".Trim()
+                  $sbomSubject = "${{ env.ARTIFACTORY_ORG }}/${{ env.SBOM_PACKAGE }}/${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip".Trim()
+
+                  Write-Host "The API information is $cleanedAppSha  $appSubject"
+                  Write-Host "The SBOM information is $cleanedSbomSha  $sbomSubject"
+
+                  $subjectText = @"
+                  $cleanedAppSha  $appSubject
+                  $cleanedSbomSha  $sbomSubject
+                  "@
+
+                  Write-Host "Creating the checksums file"
+                  New-Item -Path . -Name "subject.checksums.txt" -ItemType "File" -Value $subjectText
+            - name: Generate attestation from provenance
+              uses: actions/attest-build-provenance@v2
+              id: generate-app-attestation
+              with:
+                  subject-checksums: subject.checksums.txt
