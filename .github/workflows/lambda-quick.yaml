@@ -1,0 +1,65 @@
+name: Build and Push Lambda Image - Quick
+
+on:
+  #push:
+  #  paths:
+  #    - "API.Lambda/**"
+  #  branches:
+  #    - main
+  workflow_dispatch: {}
+
+env:
+  OCTOPUS_SPACE: New Cascadia Imports
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Set version number
+        id: version-generator
+        run: echo "version=$(date +'%Y.%m.%s')-quick" >> $GITHUB_OUTPUT
+
+      - name: Login to Octopus Deploy
+        uses: OctopusDeploy/login@v1
+        with:
+          server: https://wrg.octopus.app
+          service_account_id: b45a10cc-1380-480d-ab25-28e36d54cd63
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: arn:aws:iam::381713788115:role/ryanrousseau-github-org
+          role-session-name: githubworkflow
+          aws-region: us-west-2
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - uses: OctopusDeploy/push-build-information-action@v3
+        name: Push build information 🐙
+        with:
+          version: ${{ steps.version-generator.outputs.version }}
+          packages: |
+            demo/getversion-lambda
+
+      - name: Build and push to ECR
+        uses: docker/build-push-action@v4
+        with:
+          context: ./API.Lambda/
+          file: ./API.Lambda/Dockerfile
+          push: true
+          platforms: linux/x86_64
+          provenance: false
+          sbom: false
+          tags: |
+            381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/getversion-lambda:${{ steps.version-generator.outputs.version }}
