@@ -1,4 +1,4 @@
-namespace DemoApp;
+namespace GetVersion;
 
 public class VersionDetails
 {
