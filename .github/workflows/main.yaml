@@ -42,15 +42,40 @@ jobs:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Build and push to Docker Hub
-      uses: docker/build-push-action@v4
+    - name: configure aws credentials
+      uses: aws-actions/configure-aws-credentials@v3
       with:
-        context: ./DemoApp/
-        file: ./DemoApp/Dockerfile
-        push: true
-        tags: |
-            octopussolutionsengineering/demoapp-prime:${{ steps.version-generator.outputs.version }}
-            381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime:${{ steps.version-generator.outputs.version }}
+        role-to-assume: arn:aws:iam::381713788115:role/ryanrousseau-github-org
+        role-session-name: githubworkflow
+        aws-region: us-west-2
+
+    - name: build website container
+      id: build_container
+      working-directory: ./DemoApp/
+      run: | 
+        docker build -f "Dockerfile" \
+          --tag octopussolutionsengineering/demoapp-prime:${{ steps.version-generator.outputs.version }} \
+          --tag 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime:${{ steps.version-generator.outputs.version }} .
+
+    - name: Run Trivy vulnerability scanner on docker container
+      uses: aquasecurity/trivy-action@0.32.0
+      with:
+        image-ref:  octopussolutionsengineering/demoapp-prime:${{ steps.version-generator.outputs.version }}
+        format: 'table'
+        exit-code: '1'
+        ignore-unfixed: true
+        vuln-type: 'os,library'
+        severity: 'CRITICAL,HIGH'
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Push Docker images
+      working-directory: ./DemoApp
+      run: |
+        docker push octopussolutionsengineering/demoapp-prime:${{ steps.version-generator.outputs.version }}
+        docker push 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime:${{ steps.version-generator.outputs.version }}
 
     - uses: OctopusDeploy/push-build-information-action@v3
       name: Push Build Information 🐙
