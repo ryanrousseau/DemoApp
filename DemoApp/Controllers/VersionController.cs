@@ -31,11 +31,12 @@ public class VersionController : ControllerBase
         }
 
         var details = new VersionDetails {
-            Release = _configuration["RELEASE"],
-            Version = _configuration["VERSION"]
+            ApplicationName = _configuration["APPLICATION_NAME"],
+            DeploymentLink = _configuration["DEPLOYMENT_LINK"],
+            DeploymentTime = _configuration["DEPLOYMENT_TIME"],
+            Image = _configuration["IMAGE"],
+            Release = _configuration["RELEASE"]
         };
-
-        Console.WriteLine(details.Version);
 
         return details;
     }
