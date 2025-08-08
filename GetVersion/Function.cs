@@ -16,10 +16,14 @@ public class Function
     /// <returns></returns>
     public VersionDetails FunctionHandler(ILambdaContext context)
     {
-        var details = new VersionDetails {
+        var details = new VersionDetails
+        {
+            ApplicationName = Environment.GetEnvironmentVariable("APPLICATION_NAME"),
+            DeploymentLink = Environment.GetEnvironmentVariable("DEPLOYMENT_LINK"),
+            DeploymentTime = Environment.GetEnvironmentVariable("DEPLOYMENT_TIME"),
+            Environment = Environment.GetEnvironmentVariable("ENVIRONMENT"),
             Image = Environment.GetEnvironmentVariable("IMAGE"),
-            Release = Environment.GetEnvironmentVariable("RELEASE"),
-            Version = Environment.GetEnvironmentVariable("VERSION")
+            Release = Environment.GetEnvironmentVariable("RELEASE")
         };
 
         return details;

@@ -34,6 +34,7 @@ public class VersionController : ControllerBase
             ApplicationName = _configuration["APPLICATION_NAME"],
             DeploymentLink = _configuration["DEPLOYMENT_LINK"],
             DeploymentTime = _configuration["DEPLOYMENT_TIME"],
+            Environment = _configuration["ENVIRONMENT"],
             Image = _configuration["IMAGE"],
             Release = _configuration["RELEASE"]
         };
