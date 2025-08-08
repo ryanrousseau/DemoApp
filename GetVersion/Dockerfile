@@ -20,4 +20,7 @@ RUN dotnet publish "GetVersion.csproj" \
 FROM base AS final
 WORKDIR /var/task
 COPY --from=publish /app/publish .
+
+ENV ASPNETCORE_HTTP_PORTS=80
+
 CMD [ "GetVersion::GetVersion.Function::FunctionHandler" ]

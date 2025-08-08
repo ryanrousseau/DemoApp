@@ -16,4 +16,6 @@ WORKDIR /app
 COPY --from=build-env /app/out .
 ENTRYPOINT ["dotnet", "DemoApp.dll"]
 
+ENV ASPNETCORE_HTTP_PORTS=80
+
 EXPOSE 8080
