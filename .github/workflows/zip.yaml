@@ -1,0 +1,64 @@
+name: Build and Push Zip
+
+on:
+  push:
+    paths:
+      - "DemoApp/**"
+      - ".github/workflows/zip.yaml"
+    branches:
+      - main
+  workflow_dispatch: {}
+
+env:
+  OCTOPUS_SPACE: New Cascadia Imports
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set Version Number
+        id: version-generator
+        run: echo "version=$(date +'%Y.%m.%d').$GITHUB_RUN_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Login to Octopus Deploy
+        uses: OctopusDeploy/login@v1
+        with:
+          server: https://wrg.octopus.app
+          service_account_id: b45a10cc-1380-480d-ab25-28e36d54cd63
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0
+
+      - name: Install dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: |
+          cd DemoApp
+          dotnet build --configuration Release --no-restore
+          dotnet publish -c Release -o ../demoapp-publish -r linux-x64 --self-contained true /p:UseAppHost=true
+
+      - name: Create a Zip package 🐙
+        uses: OctopusDeploy/create-zip-package-action@v3
+        with:
+          package_id: "DemoApp"
+          version: ${{ steps.version-generator.outputs.version }}
+          output_folder: "./packaging"
+          base_path: demoapp-publish
+          files: |
+            **/*.*
+
+      - name: Push a package to Octopus Deploy 🐙
+        uses: OctopusDeploy/push-package-action@v3
+        with:
+          packages: |
+            ./packaging/DemoApp.${{ steps.version-generator.outputs.version }}.zip
