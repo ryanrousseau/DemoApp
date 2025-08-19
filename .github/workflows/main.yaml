@@ -60,7 +60,6 @@ jobs:
           sbom: false
           tags: |
             octopussolutionsengineering/demoapp-prime:${{ steps.version-generator.outputs.version }}
-            381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/getversion-lambda:${{ steps.version-generator.outputs.version }}
 
       - uses: OctopusDeploy/push-build-information-action@v3
         name: Push Build Information 🐙
