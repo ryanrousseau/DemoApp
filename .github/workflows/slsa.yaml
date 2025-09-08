@@ -7,7 +7,68 @@ env:
   OCTOPUS_SPACE: New Cascadia Imports
 
 jobs:
+  configure:
+    runs-on: ubuntu-latest
+    name: Configure
+    outputs:
+      version: ${{ steps.version-generator.outputs.version }}
+    steps:
+      - name: Set Version Number
+        id: version-generator
+        run: echo "version=$(date +'%Y.%m.%d').$GITHUB_RUN_NUMBER" >> $GITHUB_OUTPUT
+
+  scan:
+    runs-on: ubuntu-latest
+    name: Scan
+    permissions:
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner on repo
+        uses: aquasecurity/trivy-action@0.32.0
+        with:
+          scan-type: "fs"
+          ignore-unfixed: true
+          exit-code: "1"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "MEDIUM,HIGH,CRITICAL"
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "trivy-results.sarif"
+
+  create-gh-release:
+    name: Create GitHub Release
+    needs: [configure, scan]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - name: Checkout Code to build website
+        uses: actions/checkout@v1
+
+      - name: Create Release for GitHub
+        id: create_release
+        uses: ncipollo/release-action@v1
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
+        with:
+          tag: "${{ needs.configure.outputs.version }}"
+          name: Release ${{ needs.configure.outputs.version }}
+          body: |
+            Automatic Release creation by GitHub Action
+            Commit Message: ${{ github.event.head_commit.message }}
+          draft: false
+
   build:
+    needs: [configure, scan, create-gh-release]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -19,10 +80,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
-
-      - name: Set Version Number
-        id: version-generator
-        run: echo "version=$(date +'%Y.%m.%d').$GITHUB_RUN_NUMBER" >> $GITHUB_OUTPUT
 
       - name: Login to Octopus Deploy
         uses: OctopusDeploy/login@v1
@@ -48,13 +105,13 @@ jobs:
         working-directory: ./DemoApp/
         run: |
           docker build -f "Dockerfile" \
-            --tag octopussolutionsengineering/demoapp-prime:${{ steps.version-generator.outputs.version }} \
-            --tag 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime:${{ steps.version-generator.outputs.version }} .
+            --tag octopussolutionsengineering/demoapp-prime:${{ needs.configure.outputs.version }} \
+            --tag 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime:${{ needs.configure.outputs.version }} .
 
       - name: Run Trivy vulnerability scanner on docker container
         uses: aquasecurity/trivy-action@0.32.0
         with:
-          image-ref: octopussolutionsengineering/demoapp-prime:${{ steps.version-generator.outputs.version }}
+          image-ref: octopussolutionsengineering/demoapp-prime:${{ needs.configure.outputs.version }}
           format: "table"
           exit-code: "1"
           ignore-unfixed: true
@@ -68,13 +125,13 @@ jobs:
       - name: Push Docker images
         working-directory: ./DemoApp
         run: |
-          docker push octopussolutionsengineering/demoapp-prime:${{ steps.version-generator.outputs.version }}
-          docker push 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime:${{ steps.version-generator.outputs.version }}
+          docker push octopussolutionsengineering/demoapp-prime:${{ needs.configure.outputs.version }}
+          docker push 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime:${{ needs.configure.outputs.version }}
 
       - uses: OctopusDeploy/push-build-information-action@v3
         name: Push Build Information 🐙
         with:
-          version: ${{ steps.version-generator.outputs.version }}
+          version: ${{ needs.configure.outputs.version }}
           packages: |
             octopussolutionsengineering/demoapp-prime
             demo/demoapp-prime
