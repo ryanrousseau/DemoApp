@@ -135,3 +135,66 @@ jobs:
           packages: |
             octopussolutionsengineering/demoapp-prime
             demo/demoapp-prime
+
+  sbom:
+    name: Generate and Publish SBOM
+    outputs:
+      sbom_hash: ${{ steps.determine_sbom_hash.outputs.SBOM_HASH }}
+    needs: [configure, scan, create-gh-release]
+    runs-on: ubuntu-latest
+    permissions:
+      # Add any additional permissions your job requires here
+      id-token: write # This is required to obtain the OIDC Token for Octopus Deploy
+    steps:
+      - name: Checkout the code for SBOM
+        uses: actions/checkout@v1
+        with:
+          fetch-depth: "0"
+
+      - name: Run Trivy in GitHub SBOM mode and submit results to Dependency Graph
+        uses: aquasecurity/trivy-action@0.32.0
+        with:
+          scan-type: "fs"
+          format: "github"
+          output: "dependency-results.sbom.json"
+          scan-ref: "."
+          github-pat: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package SBOM
+        id: "sbom_package"
+        uses: OctopusDeploy/create-zip-package-action@v3
+        with:
+          package_id: DemoApp.SBOM
+          version: "${{ needs.configure.outputs.version }}"
+          base_path: "./"
+          files: "dependency-results.sbom.json"
+          output_folder: packaged
+
+      - name: Create the Subject Checksum file for Attestation Build Provenance
+        id: determine_sbom_hash
+        shell: pwsh
+        run: |
+          $packageHash = Get-FileHash -path "packaged/DemoApp.SBOM.${{ needs.configure.outputs.version }}.zip" -Algorithm SHA256
+          $hashToSave = $packageHash.Hash 
+          Write-Host "The SBOM package hash is $hashToSave"
+
+          "SBOM_HASH=$hashToSave" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Login to Octopus Deploy 🐙
+        uses: OctopusDeploy/login@v1
+        with:
+          server: https://wrg.octopus.app
+          service_account_id: b45a10cc-1380-480d-ab25-28e36d54cd63
+
+      - name: Push packages to Octopus 🐙
+        uses: OctopusDeploy/push-package-action@v3
+        with:
+          packages: |
+            packaged/DemoApp.SBOM.${{ needs.configure.outputs.version }}.zip
+
+      - name: Push build information to Octopus 🐙
+        uses: OctopusDeploy/push-build-information-action@v3
+        with:
+          packages: |
+            DemoApp.SBOM
+          version: "${{ needs.configure.outputs.version }}"
