@@ -4,12 +4,18 @@ on:
   workflow_dispatch: {}
 
 env:
+  OCTOPUS_URL: https://wrg.octopus.app
+  OCTOPUS_SERVICE_ACCOUNT: b45a10cc-1380-480d-ab25-28e36d54cd63
   OCTOPUS_SPACE: New Cascadia Imports
+  DOCKER_HUB_REPOSITORY: octopussolutionsengineering/demoapp-prime
+  ECR_REPOSITORY: 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime
+  #ECR_REPOSITORY: public.ecr.aws/b7k8m4j7/public-demo/demoapp-prime
+  SBOM_PACKAGE: DemoApp.SBOM
 
 jobs:
   configure:
     runs-on: ubuntu-latest
-    name: Configure
+    name: Configure Workflow
     outputs:
       version: ${{ steps.version-generator.outputs.version }}
     steps:
@@ -19,7 +25,7 @@ jobs:
 
   scan:
     runs-on: ubuntu-latest
-    name: Scan
+    name: Scan Code
     permissions:
       security-events: write
 
@@ -68,11 +74,14 @@ jobs:
           draft: false
 
   build:
+    name: Build and Scan images
     needs: [configure, scan, create-gh-release]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
+    outputs:
+      app_hash: ${{ steps.push-docker-images.outputs.DEMO_APP_DOCKER_SHA }}
 
     steps:
       - name: Checkout code
@@ -84,8 +93,8 @@ jobs:
       - name: Login to Octopus Deploy
         uses: OctopusDeploy/login@v1
         with:
-          server: https://wrg.octopus.app
-          service_account_id: b45a10cc-1380-480d-ab25-28e36d54cd63
+          server: ${{ env.OCTOPUS_URL }}
+          service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
 
       - name: Login to Docker Hub
         uses: docker/login-action@v1
@@ -105,13 +114,13 @@ jobs:
         working-directory: ./DemoApp/
         run: |
           docker build -f "Dockerfile" \
-            --tag octopussolutionsengineering/demoapp-prime:${{ needs.configure.outputs.version }} \
-            --tag 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime:${{ needs.configure.outputs.version }} .
+            --tag $DOCKER_HUB_REPOSITORY:${{ needs.configure.outputs.version }} \
+            --tag $ECR_REPOSITORY:${{ needs.configure.outputs.version }} .
 
       - name: Run Trivy vulnerability scanner on docker container
         uses: aquasecurity/trivy-action@0.32.0
         with:
-          image-ref: octopussolutionsengineering/demoapp-prime:${{ needs.configure.outputs.version }}
+          image-ref: ${{ env.DOCKER_HUB_REPOSITORY }}:${{ needs.configure.outputs.version }}
           format: "table"
           exit-code: "1"
           ignore-unfixed: true
@@ -123,17 +132,22 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Push Docker images
+        id: push-docker-images
         working-directory: ./DemoApp
         run: |
-          docker push octopussolutionsengineering/demoapp-prime:${{ needs.configure.outputs.version }}
-          docker push 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime:${{ needs.configure.outputs.version }}
+          docker push $DOCKER_HUB_REPOSITORY:${{ needs.configure.outputs.version }}
+          docker push $ECR_REPOSITORY:${{ needs.configure.outputs.version }}
+
+          dockerSha=$(docker manifest inspect $DOCKER_HUB_REPOSITORY:${{ needs.configure.outputs.version }} -v | jq -r '.Descriptor.digest')
+          echo "Docker sha is $dockerSha"            
+          echo "DEMO_APP_DOCKER_SHA=$dockerSha" >> $GITHUB_OUTPUT
 
       - uses: OctopusDeploy/push-build-information-action@v3
         name: Push Build Information 🐙
         with:
           version: ${{ needs.configure.outputs.version }}
           packages: |
-            octopussolutionsengineering/demoapp-prime
+            ${{ env.DOCKER_HUB_REPOSITORY }}
             demo/demoapp-prime
 
   sbom:
@@ -164,7 +178,7 @@ jobs:
         id: "sbom_package"
         uses: OctopusDeploy/create-zip-package-action@v3
         with:
-          package_id: DemoApp.SBOM
+          package_id: "${{ env.SBOM_PACKAGE }}"
           version: "${{ needs.configure.outputs.version }}"
           base_path: "./"
           files: "dependency-results.sbom.json"
@@ -174,7 +188,7 @@ jobs:
         id: determine_sbom_hash
         shell: pwsh
         run: |
-          $packageHash = Get-FileHash -path "packaged/DemoApp.SBOM.${{ needs.configure.outputs.version }}.zip" -Algorithm SHA256
+          $packageHash = Get-FileHash -path "packaged/${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip" -Algorithm SHA256
           $hashToSave = $packageHash.Hash 
           Write-Host "The SBOM package hash is $hashToSave"
 
@@ -183,18 +197,54 @@ jobs:
       - name: Login to Octopus Deploy 🐙
         uses: OctopusDeploy/login@v1
         with:
-          server: https://wrg.octopus.app
-          service_account_id: b45a10cc-1380-480d-ab25-28e36d54cd63
+          server: ${{ env.OCTOPUS_URL }}
+          service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
 
       - name: Push packages to Octopus 🐙
         uses: OctopusDeploy/push-package-action@v3
         with:
           packages: |
-            packaged/DemoApp.SBOM.${{ needs.configure.outputs.version }}.zip
+            packaged/${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip
 
       - name: Push build information to Octopus 🐙
         uses: OctopusDeploy/push-build-information-action@v3
         with:
           packages: |
-            DemoApp.SBOM
+            ${{ env.SBOM_PACKAGE }}
           version: "${{ needs.configure.outputs.version }}"
+
+  create_attestations:
+    name: Create Attestations
+    needs: [configure, scan, create-gh-release, build, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      attestations: write # Required to publish attestations
+    steps:
+      - name: Create the Subject Checksum file for Provenance
+        shell: pwsh
+        run: |
+          $cleanedSbomSha = $("${{ needs.sbom.outputs.sbom_hash }}" -replace "sha256:", "").Trim()
+          $cleanedImageSha = $("${{ needs.build.outputs.app_hash }}" -replace "sha256:", "").Trim()
+
+          $imageSubject = "${{ env.DOCKER_HUB_REPOSITORY }}:${{ needs.configure.outputs.version }}".Trim()
+          $ecrSubject = "demo/demoapp-prime:${{ needs.configure.outputs.version }}".Trim()
+          $sbomSubject = "${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip".Trim()
+
+          Write-Host "The website information is $cleanedImageSha  $imageSubject"
+          Write-Host "The database information is $cleanedPackageSha  $packageSubject"
+          Write-Host "The SBOM information is $cleanedSbomSha  $sbomSubject"
+
+          $subjectText = @"
+          $cleanedImageSha  $imageSubject
+          $cleanedImageSha  $ecrSubject
+          $cleanedSbomSha  $sbomSubject
+          "@
+
+          Write-Host "Creating the checksums file"
+          New-Item -Path . -Name "subject.checksums.txt" -ItemType "File" -Value $subjectText
+      - name: Generate Attestation from Provenance
+        uses: actions/attest-build-provenance@v2
+        id: websiteattest
+        with:
+          subject-checksums: subject.checksums.txt
