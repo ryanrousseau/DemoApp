@@ -73,6 +73,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    outputs:
+      app_hash: ${{ steps.push_docker_image.outputs.DEMO_APP_DOCKER_SHA }}
 
     steps:
       - name: Checkout code
@@ -127,6 +129,10 @@ jobs:
         run: |
           docker push octopussolutionsengineering/demoapp-prime:${{ needs.configure.outputs.version }}
           docker push 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime:${{ needs.configure.outputs.version }}
+
+          dockerSha=$(docker manifest inspect octopussolutionsengineering/demoapp-prime:${{ needs.configure.outputs.version }} -v | jq -r '.Descriptor.digest')
+          echo "Docker sha is $dockerSha"            
+          echo "DEMO_APP_DOCKER_SHA=$dockerSha" >> $GITHUB_OUTPUT
 
       - uses: OctopusDeploy/push-build-information-action@v3
         name: Push Build Information 🐙
@@ -198,3 +204,37 @@ jobs:
           packages: |
             DemoApp.SBOM
           version: "${{ needs.configure.outputs.version }}"
+
+  create_attestations:
+    name: Generate Attestations
+    needs: [configure, scan, create-gh-release, build, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      attestations: write # Required to publish attestations
+    steps:
+      - name: Create the Subject Checksum file for Provenance
+        shell: pwsh
+        run: |
+          $cleanedSbomSha = $("${{ needs.sbom.outputs.sbom_hash }}" -replace "sha256:", "").Trim()
+          $cleanedImageSha = $("${{ needs.build.outputs.app_hash }}" -replace "sha256:", "").Trim()
+
+          $imageSubject = "octopussolutionsengineering/demoapp-prime:${{ needs.configure.outputs.version }}".Trim()
+          $sbomSubject = "DemoApp.SBOM.${{ needs.configure.outputs.version }}.zip".Trim()
+
+          Write-Host "The website information is $cleanedImageSha  $imageSubject"
+          Write-Host "The database information is $cleanedPackageSha  $packageSubject"
+          Write-Host "The SBOM information is $cleanedSbomSha  $sbomSubject"
+
+          $subjectText = @"
+          $cleanedImageSha  $imageSubject
+          $cleanedSbomSha  $sbomSubject
+          "@
+
+          Write-Host "Creating the checksums file"
+          New-Item -Path . -Name "subject.checksums.txt" -ItemType "File" -Value $subjectText
+      - name: Generate Attestation from Provenance
+        uses: actions/attest-build-provenance@v2
+        id: websiteattest
+        with:
+          subject-checksums: subject.checksums.txt
