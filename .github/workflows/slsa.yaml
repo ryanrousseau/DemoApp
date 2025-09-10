@@ -1,6 +1,12 @@
 name: Build and Push Docker Image - SLSA
 
 on:
+  push:
+    paths:
+      - "DemoApp/**"
+      - ".github/workflows/slsa.yaml"
+    branches:
+      - main
   workflow_dispatch: {}
 
 env:
