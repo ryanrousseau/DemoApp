@@ -30,8 +30,10 @@ public class FeaturesController : ControllerBase
             }
         }
 
-        var details = new FeatureDetails {
-            AIQuotingEnabled = await _featureClient.GetBooleanValueAsync("ai-quote-generation", false)
+        var details = new FeatureDetails
+        {
+            AIQuotingEnabled = await _featureClient.GetBooleanValueAsync("ai-quote-generation", false),
+            UseBundleDiscountV2 = await _featureClient.GetBooleanValueAsync("use-bundle-discount-v2", false)
         };
 
         return details;
