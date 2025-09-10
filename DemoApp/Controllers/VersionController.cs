@@ -22,14 +22,6 @@ public class VersionController : ControllerBase
     [HttpGet(Name = "GetVersion")]
     public async Task<VersionDetails> Get()
     {
-        if (_featureClient != null) {
-            var crashApplication = await _featureClient.GetBooleanValueAsync("crash", false);
-
-            if (crashApplication) {
-                throw new Exception("Crashed!");
-            }
-        }
-
         var details = new VersionDetails {
             ApplicationName = _configuration["APPLICATION_NAME"],
             DeploymentLink = _configuration["DEPLOYMENT_LINK"],
