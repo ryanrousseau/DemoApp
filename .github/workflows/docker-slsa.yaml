@@ -1,12 +1,12 @@
 name: Build and Push Docker Image - SLSA
 
 on:
-  push:
-    paths:
-      - "DemoApp/**"
-      - ".github/workflows/slsa.yaml"
-    branches:
-      - main
+  #push:
+  #  paths:
+  #    - "DemoApp/**"
+  #    - ".github/workflows/slsa.yaml"
+  #  branches:
+  #    - main
   workflow_dispatch: {}
 
 env:
@@ -15,7 +15,6 @@ env:
   OCTOPUS_SPACE: New Cascadia Imports
   DOCKER_HUB_REPOSITORY: octopussolutionsengineering/demoapp-prime
   ECR_REPOSITORY: 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime
-  #ECR_REPOSITORY: public.ecr.aws/b7k8m4j7/public-demo/demoapp-prime
   SBOM_PACKAGE: DemoApp.SBOM
 
 jobs:

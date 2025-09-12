@@ -1,12 +1,12 @@
 name: Build and push image for Lambda
 
 on:
-  push:
-    paths:
-      - "GetVersion/**"
-      - ".github/workflows/build-lambda.yaml"
-    branches:
-      - main
+  #push:
+  #  paths:
+  #    - "GetVersion/**"
+  #    - ".github/workflows/build-lambda.yaml"
+  #  branches:
+  #    - main
   workflow_dispatch: {}
 
 env:
