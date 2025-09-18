@@ -49,8 +49,8 @@ jobs:
       - name: Build and push to ECR
         uses: docker/build-push-action@v4
         with:
-          context: ./GetVersion/
-          file: ./GetVersion/Dockerfile
+          context: ./API.Lambda/
+          file: ./API.Lambda/Dockerfile
           push: true
           platforms: linux/x86_64
           provenance: false

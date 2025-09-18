@@ -114,9 +114,9 @@ jobs:
           role-session-name: githubworkflow
           aws-region: us-west-2
 
-      - name: build website container
+      - name: Build API container
         id: build_container
-        working-directory: ./DemoApp/
+        working-directory: ./API/
         run: |
           docker build -f "Dockerfile" \
             --tag $DOCKER_HUB_REPOSITORY:${{ needs.configure.outputs.version }} \
@@ -138,7 +138,7 @@ jobs:
 
       - name: Push Docker images
         id: push-docker-images
-        working-directory: ./DemoApp
+        working-directory: ./API
         run: |
           docker push $DOCKER_HUB_REPOSITORY:${{ needs.configure.outputs.version }}
           docker push $ECR_REPOSITORY:${{ needs.configure.outputs.version }}
