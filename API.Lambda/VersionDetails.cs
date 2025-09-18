@@ -1,4 +1,4 @@
-namespace DemoApp;
+namespace API.Lambda;
 
 public class VersionDetails
 {
