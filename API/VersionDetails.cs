@@ -1,4 +1,4 @@
-namespace GetVersion;
+namespace API;
 
 public class VersionDetails
 {
