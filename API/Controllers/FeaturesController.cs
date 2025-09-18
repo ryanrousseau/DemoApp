@@ -2,7 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using OpenFeature;
 
-namespace DemoApp.Controllers;
+namespace API.Controllers;
 
 [ApiController]
 [Route("[controller]")]
