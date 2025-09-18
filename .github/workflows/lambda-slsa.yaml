@@ -7,10 +7,11 @@ env:
   OCTOPUS_URL: https://wrg.octopus.app
   OCTOPUS_SERVICE_ACCOUNT: b45a10cc-1380-480d-ab25-28e36d54cd63
   OCTOPUS_SPACE: New Cascadia Imports
-  AWS_ROLE: arn:aws:iam::381713788115:role/ryanrousseau-github-org
-  AWS_REGION: us-west-2
-  IMAGE_NAME: demo/getversion-lambda
-  IMAGE_REPOSITORY: 381713788115.dkr.ecr.us-west-2.amazonaws.com
+  ECR_ROLE_TO_ASSUME: arn:aws:iam::381713788115:role/ryanrousseau-github-org
+  ECR_SESSION_NAME: githubworkflow
+  ECR_REGION: us-west-2
+  ECR_REPOSITORY: demo/getversion-lambda
+  ECR_URL: 381713788115.dkr.ecr.us-west-2.amazonaws.com
   SBOM_PACKAGE: GetVersion.Lambda.SBOM
 
 jobs:
@@ -67,7 +68,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
         with:
-          tag: "${{ env.IMAGE_NAME }}-${{ needs.configure.outputs.version }}"
+          tag: "${{ env.ECR_REPOSITORY }}-${{ needs.configure.outputs.version }}"
           name: Release ${{ needs.configure.outputs.version }}
           body: |
             Automatic Release creation by GitHub Action
@@ -100,21 +101,21 @@ jobs:
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v3
         with:
-          role-to-assume: arn:aws:iam::381713788115:role/ryanrousseau-github-org
-          role-session-name: githubworkflow
-          aws-region: us-west-2
+          role-to-assume: ${{ env.ECR_ROLE_TO_ASSUME }}
+          role-session-name: ${{ env.ECR_SESSION_NAME }}
+          aws-region: ${{ env.ECR_REGION }}
 
       - name: build website container
         id: build_container
-        working-directory: ./GetVersion/
+        working-directory: ./API.Lambda/
         run: |
           docker build -f "Dockerfile" \
-            --tag $IMAGE_REPOSITORY/$IMAGE_NAME:${{ needs.configure.outputs.version }} .
+            --tag $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }} .
 
       - name: Run Trivy vulnerability scanner on docker container
         uses: aquasecurity/trivy-action@0.32.0
         with:
-          image-ref: ${{ env.IMAGE_REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ needs.configure.outputs.version }}
+          image-ref: ${{ env.ECR_URL }}/${{ env.ECR_REPOSITORY }}:${{ needs.configure.outputs.version }}
           format: "table"
           exit-code: "1"
           ignore-unfixed: true
@@ -127,11 +128,11 @@ jobs:
 
       - name: Push Docker images
         id: push-docker-images
-        working-directory: ./DemoApp
+        working-directory: ./API.Lambda/
         run: |
-          docker push $IMAGE_REPOSITORY/$IMAGE_NAME:${{ needs.configure.outputs.version }}
+          docker push $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }}
 
-          dockerSha=$(docker manifest inspect $IMAGE_REPOSITORY/$IMAGE_NAME:${{ needs.configure.outputs.version }} -v | jq -r '.Descriptor.digest')
+          dockerSha=$(docker manifest inspect $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }} -v | jq -r '.Descriptor.digest')
           echo "Docker sha is $dockerSha"
           echo "DEMO_APP_DOCKER_SHA=$dockerSha" >> $GITHUB_OUTPUT
 
@@ -140,7 +141,7 @@ jobs:
         with:
           version: ${{ needs.configure.outputs.version }}
           packages: |
-            ${{ env.IMAGE_NAME }}
+            ${{ env.ECR_REPOSITORY }}
 
   sbom:
     name: Generate and Publish SBOM
@@ -219,7 +220,7 @@ jobs:
           $cleanedSbomSha = $("${{ needs.sbom.outputs.sbom_hash }}" -replace "sha256:", "").Trim()
           $cleanedImageSha = $("${{ needs.build.outputs.app_hash }}" -replace "sha256:", "").Trim()
 
-          $ecrSubject = "${{ env.IMAGE_NAME }}:${{ needs.configure.outputs.version }}".Trim()
+          $ecrSubject = "${{ env.ECR_REPOSITORY }}:${{ needs.configure.outputs.version }}".Trim()
           $sbomSubject = "${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip".Trim()
 
           Write-Host "The website information is $cleanedImageSha  $imageSubject"
