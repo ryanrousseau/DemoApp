@@ -1,16 +1,18 @@
-name: Build and Push Zip
+name: Build and Push Zip - Quick
 
 on:
   #push:
   #  paths:
-  #    - "DemoApp/**"
-  #    - ".github/workflows/zip.yaml"
+  #    - "API/**"
   #  branches:
   #    - main
   workflow_dispatch: {}
 
 env:
+  OCTOPUS_URL: https://wrg.octopus.app
+  OCTOPUS_SERVICE_ACCOUNT: b45a10cc-1380-480d-ab25-28e36d54cd63
   OCTOPUS_SPACE: New Cascadia Imports
+  PACKAGE_ID: API
 
 jobs:
   build:
@@ -25,13 +27,13 @@ jobs:
 
       - name: Set Version Number
         id: version-generator
-        run: echo "version=$(date +'%Y.%m.%d').$GITHUB_RUN_NUMBER" >> $GITHUB_OUTPUT
+        run: echo "version=$(date +'%Y.%m.%d.%s').$GITHUB_RUN_NUMBER-quick" >> $GITHUB_OUTPUT
 
       - name: Login to Octopus Deploy
         uses: OctopusDeploy/login@v1
         with:
-          server: https://wrg.octopus.app
-          service_account_id: b45a10cc-1380-480d-ab25-28e36d54cd63
+          server: ${{ env.OCTOPUS_URL }}
+          service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -43,22 +45,29 @@ jobs:
 
       - name: Build
         run: |
-          cd DemoApp
+          cd API
           dotnet build --configuration Release --no-restore
           dotnet publish -c Release -o ../demoapp-publish -r linux-x64 --self-contained true /p:UseAppHost=true
 
       - name: Create a Zip package 🐙
         uses: OctopusDeploy/create-zip-package-action@v3
         with:
-          package_id: "DemoApp"
+          package_id: ${{ env.PACKAGE_ID }}
           version: ${{ steps.version-generator.outputs.version }}
           output_folder: "./packaging"
           base_path: demoapp-publish
           files: |
             **/*.*
 
+      - uses: OctopusDeploy/push-build-information-action@v3
+        name: Push Build Information 🐙
+        with:
+          version: ${{ steps.version-generator.outputs.version }}
+          packages: |
+            ${{ env.PACKAGE_ID }}
+
       - name: Push a package to Octopus Deploy 🐙
         uses: OctopusDeploy/push-package-action@v3
         with:
           packages: |
-            ./packaging/DemoApp.${{ steps.version-generator.outputs.version }}.zip
+            ./packaging/${{ env.PACKAGE_ID }}.${{ steps.version-generator.outputs.version }}.zip
