@@ -106,7 +106,7 @@ jobs:
 
       - name: build website container
         id: build_container
-        working-directory: ./GetVersion/
+        working-directory: ./API.Lambda/
         run: |
           docker build -f "Dockerfile" \
             --tag $IMAGE_REPOSITORY/$IMAGE_NAME:${{ needs.configure.outputs.version }} .
@@ -127,7 +127,7 @@ jobs:
 
       - name: Push Docker images
         id: push-docker-images
-        working-directory: ./DemoApp
+        working-directory: ./API.Lambda/
         run: |
           docker push $IMAGE_REPOSITORY/$IMAGE_NAME:${{ needs.configure.outputs.version }}
 

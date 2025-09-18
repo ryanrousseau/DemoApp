@@ -43,14 +43,14 @@ jobs:
 
       - name: Build
         run: |
-          cd DemoApp
+          cd API
           dotnet build --configuration Release --no-restore
           dotnet publish -c Release -o ../demoapp-publish -r linux-x64 --self-contained true /p:UseAppHost=true
 
       - name: Create a Zip package 🐙
         uses: OctopusDeploy/create-zip-package-action@v3
         with:
-          package_id: "DemoApp"
+          package_id: "API"
           version: ${{ steps.version-generator.outputs.version }}
           output_folder: "./packaging"
           base_path: demoapp-publish
@@ -61,4 +61,4 @@ jobs:
         uses: OctopusDeploy/push-package-action@v3
         with:
           packages: |
-            ./packaging/DemoApp.${{ steps.version-generator.outputs.version }}.zip
+            ./packaging/API.${{ steps.version-generator.outputs.version }}.zip

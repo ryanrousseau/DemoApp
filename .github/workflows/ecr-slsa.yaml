@@ -1,4 +1,4 @@
-name: Build and Push Docker Image - SLSA
+name: Build and Push ECR Image - SLSA
 
 on:
   #push:
@@ -13,8 +13,8 @@ env:
   OCTOPUS_URL: https://wrg.octopus.app
   OCTOPUS_SERVICE_ACCOUNT: b45a10cc-1380-480d-ab25-28e36d54cd63
   OCTOPUS_SPACE: New Cascadia Imports
-  DOCKER_HUB_REPOSITORY: octopussolutionsengineering/demoapp-prime
-  ECR_REPOSITORY: 381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/demoapp-prime
+  ECR_URL: 381713788115.dkr.ecr.us-west-2.amazonaws.com
+  ECR_REPOSITORY: demo/demoapp-prime
   SBOM_PACKAGE: DemoApp.SBOM
 
 jobs:
@@ -101,12 +101,6 @@ jobs:
           server: ${{ env.OCTOPUS_URL }}
           service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v1
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v3
         with:
@@ -114,36 +108,34 @@ jobs:
           role-session-name: githubworkflow
           aws-region: us-west-2
 
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
       - name: Build API container
         id: build_container
         working-directory: ./API/
         run: |
           docker build -f "Dockerfile" \
-            --tag $DOCKER_HUB_REPOSITORY:${{ needs.configure.outputs.version }} \
-            --tag $ECR_REPOSITORY:${{ needs.configure.outputs.version }} .
+            --tag $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }} .
 
       - name: Run Trivy vulnerability scanner on docker container
         uses: aquasecurity/trivy-action@0.32.0
         with:
-          image-ref: ${{ env.DOCKER_HUB_REPOSITORY }}:${{ needs.configure.outputs.version }}
+          image-ref: ${{ env.ECR_URL }}/${{ env.ECR_REPOSITORY }}:${{ needs.configure.outputs.version }}
           format: "table"
           exit-code: "1"
           ignore-unfixed: true
           vuln-type: "os,library"
           severity: "MEDIUM,HIGH,CRITICAL"
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
       - name: Push Docker images
         id: push-docker-images
         working-directory: ./API
         run: |
-          docker push $DOCKER_HUB_REPOSITORY:${{ needs.configure.outputs.version }}
-          docker push $ECR_REPOSITORY:${{ needs.configure.outputs.version }}
+          docker push $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }}
 
-          dockerSha=$(docker manifest inspect $DOCKER_HUB_REPOSITORY:${{ needs.configure.outputs.version }} -v | jq -r '.Descriptor.digest')
+          dockerSha=$(docker manifest inspect $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }} -v | jq -r '.Descriptor.digest')
           echo "Docker sha is $dockerSha"            
           echo "DEMO_APP_DOCKER_SHA=$dockerSha" >> $GITHUB_OUTPUT
 
@@ -152,8 +144,7 @@ jobs:
         with:
           version: ${{ needs.configure.outputs.version }}
           packages: |
-            ${{ env.DOCKER_HUB_REPOSITORY }}
-            demo/demoapp-prime
+            ${{ env.ECR_REPOSITORY }}
 
   sbom:
     name: Generate and Publish SBOM
@@ -232,16 +223,13 @@ jobs:
           $cleanedSbomSha = $("${{ needs.sbom.outputs.sbom_hash }}" -replace "sha256:", "").Trim()
           $cleanedImageSha = $("${{ needs.build.outputs.app_hash }}" -replace "sha256:", "").Trim()
 
-          $imageSubject = "${{ env.DOCKER_HUB_REPOSITORY }}:${{ needs.configure.outputs.version }}".Trim()
-          $ecrSubject = "demo/demoapp-prime:${{ needs.configure.outputs.version }}".Trim()
+          $ecrSubject = "${{ env.ECR_REPOSITORY }}:${{ needs.configure.outputs.version }}".Trim()
           $sbomSubject = "${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip".Trim()
 
-          Write-Host "The website information is $cleanedImageSha  $imageSubject"
-          Write-Host "The database information is $cleanedPackageSha  $packageSubject"
+          Write-Host "The API information is $cleanedImageSha  $imageSubject"
           Write-Host "The SBOM information is $cleanedSbomSha  $sbomSubject"
 
           $subjectText = @"
-          $cleanedImageSha  $imageSubject
           $cleanedImageSha  $ecrSubject
           $cleanedSbomSha  $sbomSubject
           "@
