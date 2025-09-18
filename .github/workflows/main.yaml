@@ -10,7 +10,12 @@ on:
   workflow_dispatch: {}
 
 env:
+  OCTOPUS_URL: https://wrg.octopus.app
+  OCTOPUS_SERVICE_ACCOUNT: b45a10cc-1380-480d-ab25-28e36d54cd63
   OCTOPUS_SPACE: New Cascadia Imports
+  DOCKER_HUB_REPOSITORY: octopussolutionsengineering/demoapp-prime
+  ECR_URL: 381713788115.dkr.ecr.us-west-2.amazonaws.com
+  ECR_REPOSITORY: demo/demoapp-prime
 
 jobs:
   build:
@@ -33,8 +38,8 @@ jobs:
       - name: Login to Octopus Deploy
         uses: OctopusDeploy/login@v1
         with:
-          server: https://wrg.octopus.app
-          service_account_id: b45a10cc-1380-480d-ab25-28e36d54cd63
+          server: ${{ env.OCTOPUS_URL }}
+          service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
 
       - name: Login to Docker Hub
         uses: docker/login-action@v1
@@ -52,20 +57,20 @@ jobs:
       - name: Build and push to ECR
         uses: docker/build-push-action@v4
         with:
-          context: ./GetVersion/
-          file: ./GetVersion/Dockerfile
+          context: ./API/
+          file: ./API/Dockerfile
           push: true
           platforms: linux/x86_64
           provenance: false
           sbom: false
           tags: |
-            octopussolutionsengineering/demoapp-prime:${{ steps.version-generator.outputs.version }}
-            381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/getversion-lambda:${{ steps.version-generator.outputs.version }}
+            ${{ env.DOCKER_HUB_REPOSITORY }}:${{ steps.version-generator.outputs.version }}
+            ${{ env.ECR_URL }}/${{ env.ECR_REPOSITORY }}:${{ steps.version-generator.outputs.version }}
 
       - uses: OctopusDeploy/push-build-information-action@v3
         name: Push Build Information 🐙
         with:
           version: ${{ steps.version-generator.outputs.version }}
           packages: |
-            octopussolutionsengineering/demoapp-prime
-            demo/demoapp-prime
+            ${{ env.DOCKER_HUB_REPOSITORY }}
+            ${{ env.ECR_REPOSITORY }}
