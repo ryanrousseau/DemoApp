@@ -1,6 +1,4 @@
 using Octopus.OpenFeature.Provider;
-using OpenFeature;
-using OpenFeature.Model;
 using OpenFeature.Contrib.Providers.EnvVar;
 
 var builder = WebApplication.CreateBuilder(args);
