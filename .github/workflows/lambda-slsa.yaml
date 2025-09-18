@@ -1,16 +1,22 @@
 name: Build and Push Lambda Image - SLSA
 
 on:
+  #push:
+  #  paths:
+  #    - "API.Lambda/**"
+  #  branches:
+  #    - main
   workflow_dispatch: {}
 
 env:
   OCTOPUS_URL: https://wrg.octopus.app
   OCTOPUS_SERVICE_ACCOUNT: b45a10cc-1380-480d-ab25-28e36d54cd63
   OCTOPUS_SPACE: New Cascadia Imports
-  AWS_ROLE: arn:aws:iam::381713788115:role/ryanrousseau-github-org
-  AWS_REGION: us-west-2
-  IMAGE_NAME: demo/getversion-lambda
-  IMAGE_REPOSITORY: 381713788115.dkr.ecr.us-west-2.amazonaws.com
+  ECR_ROLE_TO_ASSUME: arn:aws:iam::381713788115:role/ryanrousseau-github-org
+  ECR_SESSION_NAME: githubworkflow
+  ECR_REGION: us-west-2
+  ECR_REPOSITORY: demo/getversion-lambda
+  ECR_URL: 381713788115.dkr.ecr.us-west-2.amazonaws.com
   SBOM_PACKAGE: GetVersion.Lambda.SBOM
 
 jobs:
@@ -20,9 +26,9 @@ jobs:
     outputs:
       version: ${{ steps.version-generator.outputs.version }}
     steps:
-      - name: Set Version Number
+      - name: Set version number
         id: version-generator
-        run: echo "version=$(date +'%Y.%m.%d').$GITHUB_RUN_NUMBER" >> $GITHUB_OUTPUT
+        run: echo "version=$(date +'%Y.%m.%s')-quick" >> $GITHUB_OUTPUT
 
   scan:
     runs-on: ubuntu-latest
@@ -57,7 +63,7 @@ jobs:
       id-token: write
       contents: write
     steps:
-      - name: Checkout Code to build website
+      - name: Checkout code to build website
         uses: actions/checkout@v1
 
       - name: Create Release for GitHub
@@ -67,7 +73,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
         with:
-          tag: "${{ env.IMAGE_NAME }}-${{ needs.configure.outputs.version }}"
+          tag: "${{ env.ECR_REPOSITORY }}-${{ needs.configure.outputs.version }}"
           name: Release ${{ needs.configure.outputs.version }}
           body: |
             Automatic Release creation by GitHub Action
@@ -75,7 +81,7 @@ jobs:
           draft: false
 
   build:
-    name: Build and Scan images
+    name: Build and Scan Images
     needs: [configure, scan, create-gh-release]
     runs-on: ubuntu-latest
     permissions:
@@ -97,24 +103,24 @@ jobs:
           server: ${{ env.OCTOPUS_URL }}
           service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
 
-      - name: configure aws credentials
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v3
         with:
-          role-to-assume: arn:aws:iam::381713788115:role/ryanrousseau-github-org
-          role-session-name: githubworkflow
-          aws-region: us-west-2
+          role-to-assume: ${{ env.ECR_ROLE_TO_ASSUME }}
+          role-session-name: ${{ env.ECR_SESSION_NAME }}
+          aws-region: ${{ env.ECR_REGION }}
 
       - name: build website container
         id: build_container
-        working-directory: ./GetVersion/
+        working-directory: ./API.Lambda/
         run: |
           docker build -f "Dockerfile" \
-            --tag $IMAGE_REPOSITORY/$IMAGE_NAME:${{ needs.configure.outputs.version }} .
+            --tag $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }} .
 
       - name: Run Trivy vulnerability scanner on docker container
         uses: aquasecurity/trivy-action@0.32.0
         with:
-          image-ref: ${{ env.IMAGE_REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ needs.configure.outputs.version }}
+          image-ref: ${{ env.ECR_URL }}/${{ env.ECR_REPOSITORY }}:${{ needs.configure.outputs.version }}
           format: "table"
           exit-code: "1"
           ignore-unfixed: true
@@ -125,23 +131,22 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Push Docker images
-        id: push-docker-images
-        working-directory: ./DemoApp
-        run: |
-          docker push $IMAGE_REPOSITORY/$IMAGE_NAME:${{ needs.configure.outputs.version }}
-
-          dockerSha=$(docker manifest inspect $IMAGE_REPOSITORY/$IMAGE_NAME:${{ needs.configure.outputs.version }} -v | jq -r '.Descriptor.digest')
-          echo "Docker sha is $dockerSha"
-          echo "DEMO_APP_DOCKER_SHA=$dockerSha" >> $GITHUB_OUTPUT
-
       - uses: OctopusDeploy/push-build-information-action@v3
-        name: Push Build Information 🐙
+        name: Push build information 🐙
         with:
           version: ${{ needs.configure.outputs.version }}
           packages: |
-            ${{ env.IMAGE_NAME }}
+            ${{ env.ECR_REPOSITORY }}
 
+      - name: Push Docker images
+        id: push-docker-images
+        working-directory: ./API.Lambda/
+        run: |
+          docker push $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }}
+
+          dockerSha=$(docker manifest inspect $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }} -v | jq -r '.Descriptor.digest')
+          echo "Docker sha is $dockerSha"
+          echo "DEMO_APP_DOCKER_SHA=$dockerSha" >> $GITHUB_OUTPUT
   sbom:
     name: Generate and Publish SBOM
     outputs:
@@ -213,13 +218,13 @@ jobs:
       id-token: write
       attestations: write # Required to publish attestations
     steps:
-      - name: Create the Subject Checksum file for Provenance
+      - name: Create the subject checksum file for provenance
         shell: pwsh
         run: |
           $cleanedSbomSha = $("${{ needs.sbom.outputs.sbom_hash }}" -replace "sha256:", "").Trim()
           $cleanedImageSha = $("${{ needs.build.outputs.app_hash }}" -replace "sha256:", "").Trim()
 
-          $ecrSubject = "${{ env.IMAGE_NAME }}:${{ needs.configure.outputs.version }}".Trim()
+          $ecrSubject = "${{ env.ECR_REPOSITORY }}:${{ needs.configure.outputs.version }}".Trim()
           $sbomSubject = "${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip".Trim()
 
           Write-Host "The website information is $cleanedImageSha  $imageSubject"
@@ -233,7 +238,7 @@ jobs:
 
           Write-Host "Creating the checksums file"
           New-Item -Path . -Name "subject.checksums.txt" -ItemType "File" -Value $subjectText
-      - name: Generate Attestation from Provenance
+      - name: Generate attestation from provenance
         uses: actions/attest-build-provenance@v2
         id: websiteattest
         with:
