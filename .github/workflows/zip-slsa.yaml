@@ -1,9 +1,9 @@
-name: Build and Push Lambda Image - SLSA
+name: Build and Push Zip - SLSA
 
 on:
   #push:
   #  paths:
-  #    - "API.Lambda/**"
+  #    - "API/**"
   #  branches:
   #    - main
   workflow_dispatch: {}
@@ -12,12 +12,8 @@ env:
   OCTOPUS_URL: https://wrg.octopus.app
   OCTOPUS_SERVICE_ACCOUNT: b45a10cc-1380-480d-ab25-28e36d54cd63
   OCTOPUS_SPACE: New Cascadia Imports
-  ECR_ROLE_TO_ASSUME: arn:aws:iam::381713788115:role/ryanrousseau-github-org
-  ECR_SESSION_NAME: githubworkflow
-  ECR_REGION: us-west-2
-  ECR_REPOSITORY: demo/getversion-lambda
-  ECR_URL: 381713788115.dkr.ecr.us-west-2.amazonaws.com
-  SBOM_PACKAGE: GetVersion.Lambda.SBOM
+  PACKAGE_ID: API
+  SBOM_PACKAGE: API.SBOM
 
 jobs:
   configure:
@@ -73,7 +69,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
         with:
-          tag: "${{ env.ECR_REPOSITORY }}-${{ needs.configure.outputs.version }}"
+          tag: "${{ needs.configure.outputs.version }}"
           name: Release ${{ needs.configure.outputs.version }}
           body: |
             Automatic Release creation by GitHub Action
@@ -81,21 +77,17 @@ jobs:
           draft: false
 
   build:
-    name: Build and Scan images
+    name: Build and Scan packages
     needs: [configure, scan, create-gh-release]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-      contents: read
     outputs:
-      app_hash: ${{ steps.push-docker-images.outputs.DEMO_APP_DOCKER_SHA }}
+      app_hash: ${{ steps.determine_app_hash.outputs.APP_HASH }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
 
       - name: Login to Octopus Deploy
         uses: OctopusDeploy/login@v1
@@ -103,50 +95,63 @@ jobs:
           server: ${{ env.OCTOPUS_URL }}
           service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
 
-      - name: configure aws credentials
-        uses: aws-actions/configure-aws-credentials@v3
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
-          role-to-assume: ${{ env.ECR_ROLE_TO_ASSUME }}
-          role-session-name: ${{ env.ECR_SESSION_NAME }}
-          aws-region: ${{ env.ECR_REGION }}
+          dotnet-version: 9.0
 
-      - name: build website container
-        id: build_container
-        working-directory: ./API.Lambda/
+      - name: Install dependencies
+        run: dotnet restore
+
+      - name: Build
         run: |
-          docker build -f "Dockerfile" \
-            --tag $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }} .
+          cd API
+          dotnet build --configuration Release --no-restore
+          dotnet publish -c Release -o ../demoapp-publish -r linux-x64 --self-contained true /p:UseAppHost=true
 
-      - name: Run Trivy vulnerability scanner on docker container
+      - name: Run Trivy vulnerability scanner on published folder
         uses: aquasecurity/trivy-action@0.32.0
         with:
-          image-ref: ${{ env.ECR_URL }}/${{ env.ECR_REPOSITORY }}:${{ needs.configure.outputs.version }}
-          format: "table"
-          exit-code: "1"
+          scan-type: "fs"
+          scan-ref: "demoapp-publish"
           ignore-unfixed: true
-          vuln-type: "os,library"
-          severity: "CRITICAL"
+          exit-code: "1"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "MEDIUM,HIGH,CRITICAL"
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Create a Zip package 🐙
+        uses: OctopusDeploy/create-zip-package-action@v3
+        with:
+          package_id: ${{ env.PACKAGE_ID }}
+          version: ${{ needs.configure.outputs.version }}
+          output_folder: "./packaging"
+          base_path: demoapp-publish
+          files: |
+            **/*.*
 
-      - name: Push Docker images
-        id: push-docker-images
-        working-directory: ./API.Lambda/
+      - name: Create the Subject Checksum file for Attestation Build Provenance
+        id: determine_app_hash
+        shell: pwsh
         run: |
-          docker push $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }}
+          $packageHash = Get-FileHash -path "packaging/${{ env.PACKAGE_ID }}.${{ needs.configure.outputs.version }}.zip" -Algorithm SHA256
+          $hashToSave = $packageHash.Hash
+          Write-Host "The app hash is $hashToSave"
 
-          dockerSha=$(docker manifest inspect $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }} -v | jq -r '.Descriptor.digest')
-          echo "Docker sha is $dockerSha"
-          echo "DEMO_APP_DOCKER_SHA=$dockerSha" >> $GITHUB_OUTPUT
+          "APP_HASH=$hashToSave" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - uses: OctopusDeploy/push-build-information-action@v3
         name: Push Build Information 🐙
         with:
           version: ${{ needs.configure.outputs.version }}
           packages: |
-            ${{ env.ECR_REPOSITORY }}
+            ${{ env.PACKAGE_ID }}
+
+      - name: Push a package to Octopus Deploy 🐙
+        uses: OctopusDeploy/push-package-action@v3
+        with:
+          packages: |
+            ./packaging/${{ env.PACKAGE_ID }}.${{ needs.configure.outputs.version }}.zip
 
   sbom:
     name: Generate and Publish SBOM
@@ -223,17 +228,16 @@ jobs:
         shell: pwsh
         run: |
           $cleanedSbomSha = $("${{ needs.sbom.outputs.sbom_hash }}" -replace "sha256:", "").Trim()
-          $cleanedImageSha = $("${{ needs.build.outputs.app_hash }}" -replace "sha256:", "").Trim()
+          $cleanedAppSha = $("${{ needs.build.outputs.app_hash }}" -replace "sha256:", "").Trim()
 
-          $ecrSubject = "${{ env.ECR_REPOSITORY }}:${{ needs.configure.outputs.version }}".Trim()
+          $appSubject = "${{ env.PACKAGE_ID }}:${{ needs.configure.outputs.version }}".Trim()
           $sbomSubject = "${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip".Trim()
 
-          Write-Host "The website information is $cleanedImageSha  $imageSubject"
-          Write-Host "The database information is $cleanedPackageSha  $packageSubject"
+          Write-Host "The API information is $cleanedAppSha  $appSubject"
           Write-Host "The SBOM information is $cleanedSbomSha  $sbomSubject"
 
           $subjectText = @"
-          $cleanedImageSha  $ecrSubject
+          $cleanedAppSha  $appSubject
           $cleanedSbomSha  $sbomSubject
           "@
 
@@ -241,6 +245,6 @@ jobs:
           New-Item -Path . -Name "subject.checksums.txt" -ItemType "File" -Value $subjectText
       - name: Generate Attestation from Provenance
         uses: actions/attest-build-provenance@v2
-        id: websiteattest
+        id: generate-app-attestation
         with:
           subject-checksums: subject.checksums.txt

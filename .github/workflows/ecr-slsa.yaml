@@ -1,9 +1,9 @@
-name: Build and Push Lambda Image - SLSA
+name: Build and Push ECR Image - SLSA
 
 on:
   #push:
   #  paths:
-  #    - "API.Lambda/**"
+  #    - "API/**"
   #  branches:
   #    - main
   workflow_dispatch: {}
@@ -15,9 +15,9 @@ env:
   ECR_ROLE_TO_ASSUME: arn:aws:iam::381713788115:role/ryanrousseau-github-org
   ECR_SESSION_NAME: githubworkflow
   ECR_REGION: us-west-2
-  ECR_REPOSITORY: demo/getversion-lambda
   ECR_URL: 381713788115.dkr.ecr.us-west-2.amazonaws.com
-  SBOM_PACKAGE: GetVersion.Lambda.SBOM
+  ECR_REPOSITORY: demo/demoapp-prime
+  SBOM_PACKAGE: DemoApp.SBOM
 
 jobs:
   configure:
@@ -73,7 +73,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
         with:
-          tag: "${{ env.ECR_REPOSITORY }}-${{ needs.configure.outputs.version }}"
+          tag: "${{ needs.configure.outputs.version }}"
           name: Release ${{ needs.configure.outputs.version }}
           body: |
             Automatic Release creation by GitHub Action
@@ -110,9 +110,13 @@ jobs:
           role-session-name: ${{ env.ECR_SESSION_NAME }}
           aws-region: ${{ env.ECR_REGION }}
 
-      - name: build website container
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build API container
         id: build_container
-        working-directory: ./API.Lambda/
+        working-directory: ./API/
         run: |
           docker build -f "Dockerfile" \
             --tag $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }} .
@@ -125,20 +129,16 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           vuln-type: "os,library"
-          severity: "CRITICAL"
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+          severity: "MEDIUM,HIGH,CRITICAL"
 
       - name: Push Docker images
         id: push-docker-images
-        working-directory: ./API.Lambda/
+        working-directory: ./API
         run: |
           docker push $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }}
 
           dockerSha=$(docker manifest inspect $ECR_URL/$ECR_REPOSITORY:${{ needs.configure.outputs.version }} -v | jq -r '.Descriptor.digest')
-          echo "Docker sha is $dockerSha"
+          echo "Docker sha is $dockerSha"            
           echo "DEMO_APP_DOCKER_SHA=$dockerSha" >> $GITHUB_OUTPUT
 
       - uses: OctopusDeploy/push-build-information-action@v3
@@ -228,8 +228,7 @@ jobs:
           $ecrSubject = "${{ env.ECR_REPOSITORY }}:${{ needs.configure.outputs.version }}".Trim()
           $sbomSubject = "${{ env.SBOM_PACKAGE }}.${{ needs.configure.outputs.version }}.zip".Trim()
 
-          Write-Host "The website information is $cleanedImageSha  $imageSubject"
-          Write-Host "The database information is $cleanedPackageSha  $packageSubject"
+          Write-Host "The API information is $cleanedImageSha  $imageSubject"
           Write-Host "The SBOM information is $cleanedSbomSha  $sbomSubject"
 
           $subjectText = @"
