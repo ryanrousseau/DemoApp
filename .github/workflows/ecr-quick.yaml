@@ -1,15 +1,22 @@
-name: Build and Push Lambda Image - Quick
+name: Build and Push ECR Image - Quick
 
 on:
   #push:
   #  paths:
-  #    - "API.Lambda/**"
+  #    #- "API/**"
   #  branches:
   #    - main
   workflow_dispatch: {}
 
 env:
+  OCTOPUS_URL: https://wrg.octopus.app
+  OCTOPUS_SERVICE_ACCOUNT: b45a10cc-1380-480d-ab25-28e36d54cd63
   OCTOPUS_SPACE: New Cascadia Imports
+  ECR_ROLE_TO_ASSUME: arn:aws:iam::381713788115:role/ryanrousseau-github-org
+  ECR_SESSION_NAME: githubworkflow
+  ECR_REGION: us-west-2
+  ECR_URL: 381713788115.dkr.ecr.us-west-2.amazonaws.com
+  ECR_REPOSITORY: demo/demoapp-prime
 
 jobs:
   build:
@@ -32,15 +39,15 @@ jobs:
       - name: Login to Octopus Deploy
         uses: OctopusDeploy/login@v1
         with:
-          server: https://wrg.octopus.app
-          service_account_id: b45a10cc-1380-480d-ab25-28e36d54cd63
+          server: ${{ env.OCTOPUS_URL }}
+          service_account_id: ${{ env.OCTOPUS_SERVICE_ACCOUNT }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v3
         with:
-          role-to-assume: arn:aws:iam::381713788115:role/ryanrousseau-github-org
-          role-session-name: githubworkflow
-          aws-region: us-west-2
+          role-to-assume: ${{ env.ECR_ROLE_TO_ASSUME }}
+          role-session-name: ${{ env.ECR_SESSION_NAME }}
+          aws-region: ${{ env.ECR_REGION }}
 
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v1
@@ -50,16 +57,16 @@ jobs:
         with:
           version: ${{ steps.version-generator.outputs.version }}
           packages: |
-            demo/getversion-lambda
+            ${{ env.ECR_REPOSITORY }}
 
       - name: Build and push to ECR
         uses: docker/build-push-action@v4
         with:
-          context: ./API.Lambda/
-          file: ./API.Lambda/Dockerfile
+          context: ./API/
+          file: ./API/Dockerfile
           push: true
           platforms: linux/x86_64
           provenance: false
           sbom: false
           tags: |
-            381713788115.dkr.ecr.us-west-2.amazonaws.com/demo/getversion-lambda:${{ steps.version-generator.outputs.version }}
+            ${{ env.ECR_URL }}/${{ env.ECR_REPOSITORY }}:${{ steps.version-generator.outputs.version }}
