@@ -106,7 +106,7 @@ jobs:
 
       - name: build website container
         id: build_container
-        working-directory: ./GetVersion/
+        working-directory: ./API.Lambda/
         run: |
           docker build -f "Dockerfile" \
             --tag $IMAGE_REPOSITORY/$IMAGE_NAME:${{ needs.configure.outputs.version }} .
